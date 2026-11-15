@@ -1,0 +1,30 @@
+# Keep downloaded upstream, local dependency assets and mutable runs separate.
+upstream/
+.p0_deps/
+runs/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.env
+state/
+evidence/
+.vscode/
+.env.*
+!.env.example
+*.sqlite3*
+*.db
+*.log
+.venv/
+dist/
+build/
+*.egg-info/
+README_P0.md
+requirements-p0.txt
+# 历史学习笔记留在本地；公开文档使用下面的明确清单。
+docs/*
+!docs/system_overview.md
+!docs/project_status.md
+!docs/development.md
+tools/*
+!tools/setup_upstream.py
+!tools/check_v1.py

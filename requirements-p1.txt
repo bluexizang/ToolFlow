@@ -1,0 +1,13 @@
+# Direct packages used by P1; see docs/p1_guide.md before installing.
+pydantic==2.13.3
+loguru==0.7.3
+python-dotenv==1.2.2
+PyYAML==6.0.3
+toml==0.10.2
+addict==2.4.0
+deepdiff==9.1.0
+docstring-parser==0.18.0
+orderly-set==5.5.0
+cachebox==5.2.3
+typing-extensions==4.15.0
+psutil==7.2.2

@@ -1,0 +1,6 @@
+{
+  "repository": "https://github.com/amazon-agi/tau2-bench-verified.git",
+  "commit": "864350a8971a8f8ee9e7b8472e2edc380a806b0c",
+  "license": "MIT",
+  "directory": "upstream/tau2-bench-verified"
+}

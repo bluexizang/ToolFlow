@@ -1,0 +1,40 @@
+{
+  "model": "qwen3:8b",
+  "messages": [
+    {
+      "role": "system",
+      "content": "Retail API contract fixture. Not a real conversation."
+    },
+    {
+      "role": "user",
+      "content": "My email is shopper@example.invalid."
+    }
+  ],
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "find_user_id_by_email",
+        "description": "Look up a simulated customer by email.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "email": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "email"
+          ],
+          "additionalProperties": false
+        }
+      }
+    }
+  ],
+  "tool_choice": "auto",
+  "stream": false,
+  "max_tokens": 1024,
+  "temperature": 0.0,
+  "seed": 42,
+  "reasoning_effort": "none"
+}
