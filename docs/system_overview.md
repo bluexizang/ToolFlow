@@ -1,14 +1,14 @@
 # 架构与代码阅读顺序
 
 ```text
-控制台：run_p1 → receive → decide → execute → 回读 → 用户
-网页：run_web → WebSession → 同一个 Runtime → 消息/事件展示
-基准：run_benchmark → 官方 Orchestrator → BenchmarkAgentAdapter → Runtime.decide
+控制台：run_cli → Runtime.run_turn → LangGraph → 工具与回读 → interrupt 等用户
+网页：run_web → WebSession → Runtime.run_turn → 同一张 LangGraph
+基准：run_benchmark → 官方 Orchestrator → BenchmarkAgentAdapter → 同一张图的外部执行模式
                                               ↓
                           Orchestrator 唯一执行官方工具 → 结果交回 Runtime
 ```
 
-模型基于可见消息生成文本或原生 ToolCall。程序决定提案是否允许执行。ToolMessage 必须对应原 ToolCall.id。被拒提案保存到内部模型历史和事件，不伪装成官方已执行结果。
+模型基于可见消息生成文本或原生 ToolCall。程序决定提案是否允许执行。ToolMessage 必须对应原 ToolCall.id。被拒提案保存到内部模型历史和事件，不伪装成官方已执行结果。完整节点图与初学者执行示例见 [LangGraph 导读](langgraph_guide.md)。
 
 ## 写入
 
@@ -35,10 +35,14 @@
 |model_history.json|下一次模型请求的历史，包括内部拒绝反馈|
 |events.jsonl|追加事件与恢复动作|
 |summary.json|状态、计数、身份摘要与费用未知标记|
+|graph.sqlite3|LangGraph 每步检查点与 interrupt 暂停位置|
+|graph_state.json / graph.mmd|可读图状态与从实际图导出的拓扑|
 |final_db.json|结束时的数据库快照，仅本地复盘|
 |state/retail_extended.sqlite3|扩展业务及写回执|
 
 这些运行文件不随公共仓库发布。下一次模型请求的上下文由本地历史重新组织，不依赖供应商替项目记住会话。
+
+目前暂停恢复限于同一进程。图检查点未包含全部 Guard 和业务环境状态，不提供进程重启后自动恢复旧会话。
 
 ## 评测边界
 
@@ -48,4 +52,4 @@
 
 ## 阅读顺序
 
-先读 run_p1.py 外层循环，再追 runtime.py 的 receive、decide、execute、checkpoint。接着读 model.py、validation.py 和 recovery.py；最后看 benchmark.py、run_benchmark.py、web.py。先理解消息怎样流动，再研究框架抽象。
+先读 run_cli.py 的 run_turn 调用，再读 graph.py 的 build_graph 和 graph_state.py。沿 receive、model、validate、observe 追一次查询，再看确认和回读分支。runtime.py 提供模型、环境、日志服务；model.py、validation.py、recovery.py 分别处理协议、业务校验和错误分类。最后阅读 Benchmark 和 Web 的薄适配层。

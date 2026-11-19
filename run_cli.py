@@ -24,7 +24,7 @@ def bootstrap() -> None:
     if Path(sys.executable).resolve() != PYTHON.resolve():
         raise RuntimeError(f"Use the required interpreter: {PYTHON}")
     sys.dont_write_bytecode = True
-    sys.path[:0] = [str(ROOT / ".p0_deps"), str(ROOT / "upstream/tau2-bench-verified/src")]
+    sys.path[:0] = [str(ROOT / ".deps"), str(ROOT / "upstream/tau2-bench-verified/src")]
     from dotenv import load_dotenv
     load_dotenv(ROOT / ".env", override=False)
     os.environ["TAU2_DATA_DIR"] = str(ROOT / "upstream/tau2-bench-verified/data")
@@ -32,7 +32,7 @@ def bootstrap() -> None:
 
 
 def main() -> int:
-    """在显式循环中驱动决策、官方工具和真实用户回复。"""
+    """接收控制台输入，由共享 LangGraph 执行完整用户轮次。"""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--backend", choices=("local", "cloud"), default="local")
     parser.add_argument("--base-url")
@@ -143,21 +143,19 @@ def main() -> int:
                 continue
             if not content:
                 continue
-            runtime.receive(content)
-            while runtime.state.status == "running":
-                print("[model] 等待下一步决策…", flush=True)
-                message = runtime.decide()
-                if message.tool_calls:
-                    call = message.tool_calls[0]
-                    print(f"[tool] {call.name} {call.arguments} [{call.id}]", flush=True)
-                    result = runtime.execute(message)
-                    text = result.content or ""
+            def show_node(node: str, data: dict) -> None:
+                """展示图刚完成的节点；控制台不再编排工具循环。"""
+                if node == "model":
+                    print("[graph] 模型已返回，正在校验…", flush=True)
+                if node in {"execute", "wait_tool"} and data.get("response"):
+                    result = data["response"]
+                    text = result.get("content") or ""
                     preview = text if len(text) <= 800 else text[:800] + " … [完整内容已保存]"
-                    print(f"[result error={result.error}] {preview}", flush=True)
-                    if runtime.state.status == "waiting_user":
-                        print(f"\nAgent> {runtime.state.messages[-1].content}", flush=True)
-                else:
-                    print(f"\nAgent> {message.content}", flush=True)
+                    print(f"[result error={result['error']}] {preview}", flush=True)
+            print("[graph] 开始处理本轮…", flush=True)
+            message = runtime.run_turn(content, on_node=show_node)
+            if message is not None:
+                print(f"\nAgent> {message.content}", flush=True)
     except (EOFError, KeyboardInterrupt):
         if runtime:
             runtime.close("operator_interrupt")
@@ -165,7 +163,7 @@ def main() -> int:
         if runtime:
             runtime.event("runtime_error", {"type": type(error).__name__, "message": str(error)})
             runtime.close("runtime_error")
-        print(f"P1 stopped: {type(error).__name__}: {error}", file=sys.stderr)
+        print(f"ToolFlow stopped: {type(error).__name__}: {error}", file=sys.stderr)
         return 1
     finally:
         if server is not None:

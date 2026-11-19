@@ -12,9 +12,9 @@ import unittest
 from unittest.mock import Mock, patch
 from urllib.error import HTTPError
 
-import run_p1
+import run_cli
 
-run_p1.bootstrap()
+run_cli.bootstrap()
 
 from tau2.data_model.message import UserMessage
 from tau2.domains.retail.environment import get_environment
@@ -57,7 +57,7 @@ def http_fixture() -> dict:
 class BackendTests(unittest.TestCase):
     """在无外部连接的情况下检验请求/认证边界。"""
 
-    def test_local_request_matches_accepted_p1_record(self) -> None:
+    def test_local_request_matches_accepted_protocol_record(self) -> None:
         """使用脱敏协议样例校验请求格式，不依赖作者的私有历史记录。"""
         saved = Path(__file__).parent / "fixtures/local_request.json"
         request = json.loads(saved.read_text(encoding="utf-8"))
@@ -174,27 +174,27 @@ class BackendTests(unittest.TestCase):
     def test_cloud_cli_does_not_start_local_server_without_key(self) -> None:
         """缺失云端密钥不能触发 GPU 加载或本地回退。"""
         arguments = [
-            "run_p1.py", "--backend", "cloud", "--base-url",
+            "run_cli.py", "--backend", "cloud", "--base-url",
             "https://model.example.invalid/v1", "--model", "contract-model",
             "--api-key-env", KEY_NAME,
         ]
         with patch.dict(os.environ, {KEY_NAME: ""}), patch("sys.argv", arguments):
             with patch("sys.stderr", new=StringIO()):
                 with patch("toolflow.local_server.LocalServer.ensure_ready") as start:
-                    self.assertEqual(run_p1.main(), 1)
+                    self.assertEqual(run_cli.main(), 1)
                     start.assert_not_called()
 
     def test_check_config_never_prints_key_or_connects(self) -> None:
         """配置预览在提供云端密钥之前即可工作。"""
         arguments = [
-            "run_p1.py", "--backend", "cloud", "--base-url",
+            "run_cli.py", "--backend", "cloud", "--base-url",
             "https://model.example.invalid/v1", "--model", "contract-model",
             "--api-key-env", KEY_NAME, "--check-config",
         ]
         output = StringIO()
         with patch.dict(os.environ, {KEY_NAME: TEST_KEY}), patch("sys.argv", arguments):
             with patch("sys.stdout", new=output):
-                self.assertEqual(run_p1.main(), 0)
+                self.assertEqual(run_cli.main(), 0)
         self.assertNotIn(TEST_KEY, output.getvalue())
         preview = json.loads(output.getvalue())
         self.assertEqual(preview["backend"], "cloud")

@@ -1,8 +1,0 @@
-# 在指定解释器中实测的入口依赖；安装到项目隔离目录，不升级研究环境。
--r requirements-p1.txt
-litellm==1.86.2
-pandas==2.3.3
-gymnasium==1.4.0
-httpx==0.28.1
-openai==2.24.0
-tenacity==9.1.4

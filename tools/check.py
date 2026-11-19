@@ -13,7 +13,7 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from run_p1 import bootstrap
+from run_cli import bootstrap
 
 
 def file_hash(path: Path) -> str | None:
@@ -32,7 +32,7 @@ def main() -> int:
     bootstrap()
     from loguru import logger
     logger.remove()
-    output = ROOT / "evidence/v1" / uuid.uuid4().hex
+    output = ROOT / "runs/checks" / uuid.uuid4().hex
     output.mkdir(parents=True)
     targets = {
         "official_db": ROOT / "upstream/tau2-bench-verified/data/tau2/domains/retail/db.json",

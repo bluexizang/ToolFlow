@@ -13,7 +13,7 @@ from toolflow.budgets import (
     DEFAULT_MAX_OUTPUT_TOKENS, DEFAULT_MAX_REPAIRS,
 )
 
-from run_p1 import ROOT, bootstrap
+from run_cli import ROOT, bootstrap
 from toolflow.local_config import DEFAULT_LOCAL_MODEL
 
 

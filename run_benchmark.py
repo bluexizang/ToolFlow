@@ -19,7 +19,7 @@ import sys
 import time
 import uuid
 
-from run_p1 import ROOT, bootstrap
+from run_cli import ROOT, bootstrap
 
 PINNED_SHA = "864350a8971a8f8ee9e7b8472e2edc380a806b0c"
 

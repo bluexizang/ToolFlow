@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from tau2.data_model.message import ToolCall, ToolMessage
 
-RUNTIME_REVISION = "identity_recovery_v2"
+RUNTIME_REVISION = "langgraph_v1"
 IDENTITY_QUESTION = "未能核实您的账户。请核对邮箱，或提供您的姓名和邮政编码，以便继续查询。"
 
 

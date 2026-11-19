@@ -1,4 +1,4 @@
-"""P1 协议/执行检查；这些 fixture 不会生成 Agent 动作。"""
+"""模型协议与执行检查；这些 fixture 不会生成 Agent 动作。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from run_p1 import bootstrap
+from run_cli import bootstrap
 
 bootstrap()
 
@@ -76,7 +76,7 @@ class ProtocolTests(unittest.TestCase):
             parse_response(invalid)
 
     def test_reject_remote_and_cloud_transport(self) -> None:
-        """P1 不能悄悄地把此对话发送到计费端点。"""
+        """本地模式不能悄悄地把此对话发送到计费端点。"""
         with self.assertRaises(ValueError):
             LocalChatModel(ModelConfig(base_url="https://example.org/v1"))
         with self.assertRaises(ValueError):

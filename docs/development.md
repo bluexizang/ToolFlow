@@ -2,13 +2,17 @@
 
 ## 安装和依赖
 
-直接依赖由 requirements-v1.txt 及其引用文件固定；这不是所有操作系统和传递依赖的完整锁文件。上游由 tools/setup_upstream.py 获取，必须匹配 upstream.lock.json。已有不同版本或改动的上游目录只报错，不覆盖。
+直接依赖统一由 requirements.txt 固定；这不是所有操作系统和传递依赖的完整锁文件。依赖安装到项目 .deps，不修改全局研究环境。上游由 tools/setup_upstream.py 获取，必须匹配 upstream.lock.json。已有不同版本或改动的上游目录只报错，不覆盖。
 
 Python 要求 3.10+。可通过 TOOLFLOW_PYTHON 设置必须使用的解释器绝对路径；未配置时使用当前解释器。作者本机仍使用 README 中的指定 Windows 解释器。
 
+当前使用 LangGraph 1.2.22、langgraph-checkpoint-sqlite 3.1.3。图定义在 toolflow/graph.py，状态字段在 toolflow/graph_state.py。CLI、Web 和官方适配器共享同一张图；不得在入口再增加第二套 Agent 决策循环。
+
+SQLite 连接按单次图调用打开并关闭，运行文件保持隔离。interrupt 所在的暂停节点本身不执行数据库写入：授权、实际工具执行与等待结果分别是不同节点。未开放进程重启恢复，不能仅凭图检查点重放业务写入。详细说明见 [LangGraph 导读](langgraph_guide.md)。
+
 ## 离线与真实评测
 
-tools/check_v1.py 保存独立验收报告，阻断外部 socket 连接，只允许回环 HTTP，并比较原始数据库和已有扩展 SQLite 的前后哈希。依赖安装及上游获取必须先完成。
+tools/check.py 保存独立验收报告，阻断外部 socket 连接，只允许回环 HTTP，并比较原始数据库和已有扩展 SQLite 的前后哈希。依赖安装及上游获取必须先完成。
 
 测试使用真实的模拟环境、官方消息/编排/评分类和隔离数据库，仅模型传输边界使用测试响应。公开协议样例位于 tests/fixtures，不依赖私有 runs 文件。生产入口不会使用这些响应，回放也不能冒充真实模型成绩。
 

@@ -18,7 +18,7 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
-from run_p1 import ROOT, bootstrap
+from run_cli import ROOT, bootstrap
 
 bootstrap()
 

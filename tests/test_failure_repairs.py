@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from unittest.mock import Mock
 
-from run_p1 import bootstrap
+from run_cli import bootstrap
 
 bootstrap()
 

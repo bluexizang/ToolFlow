@@ -6,7 +6,6 @@ from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any
-import uuid
 
 from tau2.agent.base import LocalAgent, is_valid_agent_history_message
 from tau2.agent.llm_agent import LLMAgent
@@ -54,8 +53,6 @@ class BenchmarkAgentAdapter(LocalAgent[RetailRuntime]):
         self.max_repairs = max_repairs
         self.runtime: RetailRuntime | None = None
         self.pending_call: ToolCall | None = None
-        self.before_write: str | None = None
-        self.readback_expected: str | None = None
 
     def get_init_state(self, message_history: list[Message] | None = None) -> RetailRuntime:
         """从可见历史恢复证据；旧确认无条件失效，绝不重放数据库写入。"""
@@ -71,8 +68,6 @@ class BenchmarkAgentAdapter(LocalAgent[RetailRuntime]):
         )
         self.runtime = runtime
         self.pending_call = None
-        self.before_write = None
-        self.readback_expected = None
         calls: dict[str, ToolCall] = {}
         for message in history:
             runtime.state.messages.append(message)
@@ -123,67 +118,16 @@ class BenchmarkAgentAdapter(LocalAgent[RetailRuntime]):
             if len(message.tool_messages) != 1:
                 raise ValueError("Retail runtime supports one pending tool")
             message = message.tool_messages[0]
+        flow = state._get_flow()
         if isinstance(message, UserMessage):
             if self.pending_call:
                 raise ValueError("tool result required before another user turn")
-            state.receive(message.content or "")
+            candidate = flow.run_user(message.content or "", external=True)
         else:
-            call = self.pending_call
-            if call is None or message.id != call.id or message.requestor != "assistant":
-                raise ValueError("tool result correlation mismatch")
-            self.pending_call = None
-            state.state.messages.append(message)
-            state.provider_history.append(provider_message(message))
-            state.state.tool_calls += 1
-            state.guard.observe(call, message)
-            if not message.error:
-                state.state.turn_repairs = 0
-            state.state.status = "running"
-            state.event("external_tool_finished", {"call": call.model_dump(mode="json"), "response": message.model_dump(mode="json")})
-            if self.readback_expected is not None:
-                expected = self.readback_expected
-                self.readback_expected = None
-                matches = not message.error and json.loads(message.content) == json.loads(expected)
-                state.event("readback_finished", {"matches_write_result": matches})
-                if not matches:
-                    state.state.recovery_action = "stop"
-                    state.event("recovery_decision", {"code": "READBACK_MISMATCH", "next_action": "stop"})
-                    raise RuntimeError("external write readback mismatch; no retry")
-            elif state.guard.is_write(call):
-                if message.error and self.before_write != self.environment.get_db_hash():
-                    state.state.recovery_action = "stop"
-                    state.event("recovery_decision", {"code": "WRITE_OUTCOME_UNCERTAIN", "next_action": "stop"})
-                    raise RuntimeError("write outcome uncertain; no retry")
-                if not message.error:
-                    key = "order_id" if "order_id" in call.arguments else "user_id"
-                    readback = ToolCall(
-                        id="tf_readback_" + uuid.uuid4().hex,
-                        name="get_order_details" if key == "order_id" else "get_user_details",
-                        arguments={key: call.arguments[key]},
-                    )
-                    result = AssistantMessage(role="assistant", tool_calls=[readback], cost=0.0)
-                    state.state.messages.append(result)
-                    state.provider_history.append(provider_message(result))
-                    state.state.status = "waiting_tool"
-                    self.pending_call = readback
-                    self.readback_expected = message.content
-                    state.event("external_readback_started", readback.model_dump(mode="json"))
-                    return result, state
-            if message.error:
-                state.record_tool_error(call, message)
-                if state.state.status == "waiting_user":
-                    return state.state.messages[-1], state
-        candidate = state.decide()
-        if candidate.tool_calls:
-            call = candidate.tool_calls[0]
-            # 工具尚未执行；在交出执行权之前再次检查并消耗一次性确认。
-            if state.guard.check(call) is not None:
-                raise RuntimeError("unconfirmed write cannot leave adapter")
-            if state.guard.is_write(call):
-                self.before_write = self.environment.get_db_hash()
-                state.guard.consume_confirmation(call)
-                state.event("external_write_authorized", {"call_id": call.id, "db_hash": self.before_write})
-            self.pending_call = call
+            candidate = flow.run_tool(message, pending=self.pending_call)
+        if candidate is None:
+            raise RuntimeError("agent graph stopped without a response")
+        self.pending_call = candidate.tool_calls[0] if candidate.tool_calls else None
         return candidate, state
 
     def stop(self, message: Any = None, state: RetailRuntime | None = None) -> None:

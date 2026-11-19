@@ -62,7 +62,7 @@ class LocalServer:
                 "OLLAMA_MAX_LOADED_MODELS": "1", "OLLAMA_KV_CACHE_TYPE": "q8_0",
                 "OLLAMA_FLASH_ATTENTION": "1", "OLLAMA_NO_CLOUD": "1",
             })
-            folder = self.project / "runs/p1"
+            folder = self.project / "runs/local_server"
             folder.mkdir(parents=True, exist_ok=True)
             self.log = (folder / "ollama_server.log").open("ab")
             self.process = subprocess.Popen(
@@ -73,7 +73,7 @@ class LocalServer:
             deadline = time.monotonic() + 45
             while time.monotonic() < deadline:
                 if self.process.poll() is not None:
-                    raise RuntimeError("Ollama exited; inspect runs/p1/ollama_server.log")
+                    raise RuntimeError("Ollama exited; inspect runs/local_server/ollama_server.log")
                 try:
                     self.request("/api/tags")
                     break
@@ -124,7 +124,7 @@ class LocalServer:
                     child.pid for child in children if child.is_running()
                 ],
             }
-            (self.project / "runs/p1/last_server_cleanup.json").write_text(
+            (self.project / "runs/local_server/last_server_cleanup.json").write_text(
                 json.dumps(cleanup, indent=2), encoding="utf-8",
             )
             self.process = None

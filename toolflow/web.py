@@ -31,7 +31,7 @@ class WebSession:
         self.stopping = threading.Event()
 
     def submit(self, content: str, request_id: str) -> dict[str, Any]:
-        """在后台驱动完整工具循环；异常保留证据后停止会话。"""
+        """后台调用共享 LangGraph；前端只负责提交消息与轮询状态。"""
         with self.requests_lock:
             existing = self.requests.get(request_id)
             if existing is not None:
@@ -48,17 +48,7 @@ class WebSession:
 
         def work() -> None:
             try:
-                self.runtime.receive(content)
-                while self.runtime.state.status == "running":
-                    if self.stopping.is_set():
-                        self.runtime.close("web_server_shutdown")
-                        break
-                    message = self.runtime.decide()
-                    if self.stopping.is_set():
-                        self.runtime.close("web_server_shutdown")
-                        break
-                    if message.tool_calls:
-                        self.runtime.execute(message)
+                self.runtime.run_turn(content, should_stop=self.stopping.is_set)
             except Exception as error:
                 self.error = self.runtime.model.redact(f"{type(error).__name__}: {error}")
                 self.runtime.event("runtime_error", {"message": self.error})

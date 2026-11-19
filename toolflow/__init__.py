@@ -1,1 +1,1 @@
-"""ToolFlow P1：显式的、基于真实模型的 Retail 交互。"""
+"""ToolFlow：由 LangGraph 编排的可靠零售工具调用 Agent。"""

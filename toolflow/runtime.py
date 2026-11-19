@@ -1,4 +1,4 @@
-"""显式单步运行时，以及每次运行的官方 Retail 环境。"""
+"""会话服务：准备模型、环境和日志，执行顺序统一交给 LangGraph。"""
 
 from __future__ import annotations
 
@@ -11,21 +11,25 @@ import json
 from pathlib import Path
 import subprocess
 import time
-from typing import Any
+from typing import Any, Callable, TYPE_CHECKING
 import uuid
 
 from tau2.data_model.message import AssistantMessage, ToolCall, ToolMessage, UserMessage
 from tau2.domains.retail.environment import get_environment
 
-from .model import ModelConfig, ModelProtocolError, create_model, parse_response
+from .model import ModelConfig, create_model, parse_response
 from .console import clean_input
 from .budgets import (
     DEFAULT_MAX_MODEL_CALLS, DEFAULT_MAX_TOTAL_TOKENS, DEFAULT_MAX_REPAIRS,
 )
-from .validation import GuardError, RetailGuard, fingerprint
+from .validation import RetailGuard
 from .recovery import (
-    RUNTIME_REVISION, IDENTITY_QUESTION, classify_guard_error, classify_tool_error,
+    RUNTIME_REVISION, classify_tool_error,
 )
+
+
+if TYPE_CHECKING:
+    from .graph import ToolFlowGraph
 
 
 PREPARATIONS = {"prepare_exchange": "exchange_delivered_order_items"}
@@ -150,7 +154,7 @@ class RetailRuntime:
         self, project_root: Path, config: ModelConfig,
         max_model_calls: int = DEFAULT_MAX_MODEL_CALLS, max_total_tokens: int = DEFAULT_MAX_TOTAL_TOKENS,
         retail_mode: str = "official", store_path: Path | None = None,
-        *, environment: Any | None = None, output_group: str = "p1",
+        *, environment: Any | None = None, output_group: str = "cli",
         enhanced_validation: bool = True, recovery: bool = True,
         max_repairs: int = DEFAULT_MAX_REPAIRS,
     ) -> None:
@@ -192,7 +196,7 @@ class RetailRuntime:
             ["git", "-C", str(upstream), "rev-parse", "HEAD"], text=True,
         ).strip()
         if commit != "864350a8971a8f8ee9e7b8472e2edc380a806b0c":
-            raise ValueError("upstream differs from the audited P0 commit")
+            raise ValueError("upstream differs from the pinned commit")
         scope = (
             "Account registration and new purchases are unsupported in official "
             "mode; follow the policy transfer rule."
@@ -228,6 +232,7 @@ class RetailRuntime:
             "retail_mode": retail_mode,
             "store_path": str(store_path) if store_path is not None else None,
             "runtime_revision": RUNTIME_REVISION,
+            "orchestrator": "langgraph",
             "disabled_tools": {"get_item_details": "pinned upstream _get_item defect"},
             "internal_tools": list(self.preparations),
             "enhanced_validation": enhanced_validation, "recovery": recovery,
@@ -261,6 +266,7 @@ class RetailRuntime:
         summary["api_fee_status"] = (
             "local_no_api_charge" if backend == "local" else "not_estimated"
         )
+        summary["orchestrator"] = "langgraph"
         summary["business_success"] = "requires_independent_verification"
         save_json(self.output / "summary.json", summary)
 
@@ -401,147 +407,43 @@ class RetailRuntime:
         })
         return message
 
+    def _get_flow(self) -> ToolFlowGraph:
+        """延迟构建同一张 LangGraph，便于隔离环境初始化与编排。"""
+        from .graph import ToolFlowGraph
+        if not hasattr(self, "flow"):
+            self.flow = ToolFlowGraph(self)
+        return self.flow
+
+    def run_turn(
+        self, content: str, *,
+        on_node: Callable[[str, dict[str, Any]], None] | None = None,
+        should_stop: Callable[[], bool] | None = None,
+    ) -> AssistantMessage | None:
+        """CLI 和 Web 的统一入口：由图驱动到下一次等待用户。"""
+        return self._get_flow().run_user(content, on_node=on_node, should_stop=should_stop)
+
     def decide(self) -> AssistantMessage:
-        """校验原生工具提议，在可配置的连续失败预算内给出修正反馈。"""
-        while True:
-            candidate = None
-            try:
-                candidate = self._request()
-                if candidate.tool_calls and self.guard.needs_identity_input():
-                    raise GuardError("USER_INPUT_REQUIRED", "A failed identity lookup requires corrected user information before any further tool call.")
-                if not candidate.tool_calls:
-                    self.guard.check_text(candidate.content)
-                if candidate.tool_calls:
-                    call = candidate.tool_calls[0]
-                    preparations = getattr(self, "preparations", PREPARATIONS)
-                    if call.name not in self.tool_names and call.name not in preparations:
-                        raise GuardError("UNKNOWN_OR_DISABLED_TOOL", "Use only provided tools. For variants use get_product_details.")
-                    if call.id in self.seen_call_ids:
-                        raise ModelProtocolError("duplicate provider call ID")
-                    self.seen_call_ids.add(call.id)
-                    self.provider_history.append(provider_message(candidate))
-                    prepared = call.name in preparations
-                    checked_call = call.model_copy(update={"name": preparations[call.name]}) if prepared else call
-                    if hasattr(self.environment, "refresh"):
-                        self.environment.refresh()
-                    proposal = self.guard.check(checked_call)
-                    if prepared and proposal is None:
-                        raise GuardError("WRITE_ALREADY_CONFIRMED", f"The preview is already confirmed. Call {checked_call.name} with the exact approved parameters now.")
-                    if proposal is not None:
-                        # 这是一个延迟确认的提议，而非已执行的官方调用。
-                        self.provider_history.append({
-                            "role": "tool", "tool_call_id": call.id,
-                            "content": json.dumps({"code": "CONFIRMATION_REQUIRED", "executed": False}),
-                        })
-                        self.event("confirmation_required", {
-                            "proposal": asdict(proposal), "provider_call_id": call.id,
-                        })
-                        return self._say(proposal.review, "runtime_confirmation")
-                self.state.messages.append(candidate)
-                if not candidate.tool_calls:
-                    self.provider_history.append(provider_message(candidate))
-                    # 之后的“同意”绝不能批准此前已被取代的审核。
-                    self.guard.pending = None
-                    self.guard.confirmed = None
-                self.state.status = "waiting_tool" if candidate.tool_calls else "waiting_user"
-                self.event("assistant_message", {
-                    "source": "model", "message": candidate.model_dump(mode="json"),
-                })
-                return candidate
-            except (GuardError, ModelProtocolError) as error:
-                code = error.code if isinstance(error, GuardError) else "MODEL_PROTOCOL"
-                self.state.blocked_proposals += 1
-                decision = classify_guard_error(code, str(error), self.guard)
-                if decision.action == "repair":
-                    self.state.turn_repairs += 1
-                self.state.recovery_action = decision.action
-                feedback = {"code": code, "executed": False, "detail": str(error),
-                            "next_action": decision.action, "recovery": decision.instruction}
-                if (candidate and candidate.tool_calls
-                        and self.provider_history
-                        and self.provider_history[-1].get("tool_calls")
-                        and self.provider_history[-1]["tool_calls"][0]["id"] == candidate.tool_calls[0].id):
-                    self.provider_history.append({
-                        "role": "tool", "tool_call_id": candidate.tool_calls[0].id,
-                        "content": json.dumps(feedback, ensure_ascii=False),
-                    })
-                else:
-                    self.provider_history.append({"role": "system", "content": (
-                        "Runtime rejected your last output before execution. "
-                        + json.dumps(feedback, ensure_ascii=False)
-                        + " Correct the format/parameters, or ask the user for missing information."
-                    )})
-                self.event("proposal_blocked", {
-                    **feedback,
-                    "provider_call_id": (candidate.tool_calls[0].id
-                                         if candidate and candidate.tool_calls else None),
-                })
-                self.event("recovery_decision", {"code": code, "next_action": decision.action})
-                if decision.action == "ask_user":
-                    self.state.turn_repairs = 0
-                    self.guard.pending = None
-                    self.guard.confirmed = None
-                    return self._say(decision.question or IDENTITY_QUESTION, "runtime_information_request")
-                if self.state.turn_repairs >= getattr(self, "repair_limit", DEFAULT_MAX_REPAIRS):
-                    self.guard.pending = None
-                    self.guard.confirmed = None
-                    return self._say(
-                        f"当前步骤已达到 {getattr(self, 'repair_limit', DEFAULT_MAX_REPAIRS)} 次连续修正上限，已暂停；未执行被拦截的工具提议。"
-                        f"原因：{code}，{error}。请根据原因补充信息或调整需求后继续。",
-                        "runtime_recovery_pause",
-                    )
+        """逐步学习接口：让同一张图运行到一个合法提议，不执行工具。"""
+        if self.state.model_calls >= self.max_model_calls:
+            raise RuntimeError("run model-call budget exhausted")
+        from .graph_state import FlowState
+        flow = self._get_flow()
+        flow._run(FlowState(entry="model", mode="decision", candidate=None, error=None,
+                            is_readback=False), "decision")
+        return flow.last_assistant()
 
     def execute(self, message: AssistantMessage) -> ToolMessage:
-        """通过官方环境执行且仅执行一个待处理的工具调用。"""
+        """逐步学习接口：由图执行刚批准的一个调用及必要的写后回查。"""
         if self.state.status != "waiting_tool" or not message.tool_calls:
             raise RuntimeError("there is no pending tool call")
-        call = message.tool_calls[0]
         if message is not self.state.messages[-1]:
             raise RuntimeError("tool request is not the latest accepted decision")
-        # 在执行边界处再次校验，使延迟/过期的决策
-        # 无法绕过确认或时效性检查。
-        if hasattr(self.environment, "refresh"):
-            self.environment.refresh()
-        proposal = self.guard.check(call)
-        if proposal is not None:
-            raise RuntimeError("write requires fresh user confirmation")
-        write = self.guard.is_write(call)
-        before = self.environment.get_db_hash() if write else None
-        if write:
-            if hasattr(self.environment, "expected_write_hash"):
-                self.environment.expected_write_hash = before
-            self.guard.consume_confirmation(call)
-            self.event("write_attempt", {"fingerprint": fingerprint(call), "db_hash": before})
-        started = time.perf_counter()
-        self.event("tool_started", call.model_dump(mode="json"))
-        response = self.environment.get_response(call)
-        assert response.id == call.id, "official tool correlation changed"
-        self.state.tool_calls += 1
-        self.state.messages.append(response)
-        self.provider_history.append(provider_message(response))
-        self.guard.observe(call, response)
-        if not response.error:
-            # 当前工具已成功完成，后续步骤重新计算连续失败次数。
-            self.state.turn_repairs = 0
-        self.state.status = "running"
-        self.event("tool_finished", {
-            "name": call.name, "seconds": time.perf_counter() - started,
-            "response": response.model_dump(mode="json"),
-        })
-        if write:
-            if response.error:
-                if self.environment.get_db_hash() != before:
-                    self.state.status = "failed"
-                    self.state.stop_reason = "write_outcome_error"
-                    self.state.recovery_action = "stop"
-                    self.event("recovery_decision", {"code": "WRITE_OUTCOME_UNCERTAIN", "next_action": "stop"})
-                    self.event("write_outcome_uncertain", {"call_id": call.id})
-                    raise RuntimeError("write failed after state changed; no automatic retry")
-            else:
-                self._read_back(call, response)
-        if response.error:
-            self.record_tool_error(call, response)
-        return response
+        from .graph_state import FlowState
+        result = self._get_flow()._run(FlowState(
+            entry="authorize", mode="execution", candidate=message.model_dump(mode="json"),
+            call=message.tool_calls[0].model_dump(mode="json"), is_readback=False,
+        ), "execution")
+        return ToolMessage.model_validate(result["execution_result"])
 
     def record_tool_error(self, call: ToolCall, response: ToolMessage) -> None:
         """共享执行后错误分流，用户信息缺失不计为模型连续修正失败。
@@ -564,40 +466,11 @@ class RetailRuntime:
         if self.state.turn_repairs >= getattr(self, "repair_limit", DEFAULT_MAX_REPAIRS):
             self._say("当前步骤多次修正仍未成功，请补充信息或调整需求；失败记录已保存。", "runtime_recovery_pause")
 
-    def _read_back(self, write: ToolCall, response: ToolMessage) -> None:
-        """通过官方工具回读被修改的实体并验证结果。"""
-        result = json.loads(response.content)
+    def _verified_receipt(self, write: ToolCall, data: dict[str, Any]) -> AssistantMessage:
+        """仅在图的回查节点验证成功后，生成基于事实的模拟业务回执。"""
         profile = write.name == "register_account" or (
             "order_id" not in write.arguments and write.name != "place_order"
         )
-        key = "user_id" if profile else "order_id"
-        call = ToolCall(
-            id="tf_readback_" + uuid.uuid4().hex,
-            name="get_user_details" if profile else "get_order_details",
-            arguments={key: write.arguments.get(key, result[key])},
-        )
-        message = AssistantMessage(role="assistant", tool_calls=[call])
-        self.state.messages.append(message)
-        self.provider_history.append(provider_message(message))
-        self.event("readback_started", {"source": "runtime", "call": call.model_dump(mode="json")})
-        checked = self.environment.get_response(call)
-        self.state.tool_calls += 1
-        self.state.messages.append(checked)
-        self.provider_history.append(provider_message(checked))
-        self.guard.observe(call, checked)
-        match = not checked.error and json.loads(checked.content) == json.loads(response.content)
-        self.event("readback_finished", {
-            "source": "runtime", "matches_write_result": match,
-            "response": checked.model_dump(mode="json"),
-        })
-        if not match:
-            self.state.status = "failed"
-            self.state.stop_reason = "readback_error"
-            self.state.recovery_action = "stop"
-            self.event("recovery_decision", {"code": "READBACK_MISMATCH", "next_action": "stop"})
-            self.event("integrity_failure", {"call_id": write.id, "kind": "readback_mismatch"})
-            raise RuntimeError("write readback mismatch; inspect state before any retry")
-        data = json.loads(checked.content)
         content = f"模拟数据库操作已提交并回查一致：{write.name}。"
         if write.name == "register_account":
             content += f"账号 {data['user_id']}，邮箱 {data['email']}；已自动进入该账号会话，测试支付方式已创建。"
@@ -611,7 +484,7 @@ class RetailRuntime:
             direction = "退回" if difference < 0 else "补付" if difference > 0 else "无需补退"
             content += f"差价 ${difference:.2f}，{direction} ${abs(difference):.2f}；方式 {data['exchange_payment_method_id']}。"
         content += "这是模拟系统中的申请/更新结果。"
-        self._say(content, "runtime_verified_receipt")
+        return self._say(content, "runtime_verified_receipt")
 
     def close(self, reason: str) -> None:
         """持久化最终数据库与停止原因，但不声称任务成功。"""

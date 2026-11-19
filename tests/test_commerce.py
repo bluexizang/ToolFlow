@@ -10,9 +10,9 @@ import tempfile
 import unittest
 from unittest.mock import Mock, patch
 
-import run_p1
+import run_cli
 
-run_p1.bootstrap()
+run_cli.bootstrap()
 
 from tau2.data_model.message import ToolCall
 from tau2.domains.retail.environment import get_environment
@@ -464,11 +464,11 @@ class CommerceRuntimeTests(CommerceFixture):
     def test_cli_configuration_exposes_mode_without_connecting(self) -> None:
         for mode in ("official", "extended"):
             with patch(
-                "sys.argv", ["run_p1.py", "--check-config", "--retail-mode", mode]
+                "sys.argv", ["run_cli.py", "--check-config", "--retail-mode", mode]
             ):
                 output = StringIO()
                 with patch("sys.stdout", output):
-                    self.assertEqual(run_p1.main(), 0)
+                    self.assertEqual(run_cli.main(), 0)
                 value = json.loads(output.getvalue())
                 self.assertEqual(value["retail_mode"], mode)
                 self.assertEqual(value["network_requests"], 0)
